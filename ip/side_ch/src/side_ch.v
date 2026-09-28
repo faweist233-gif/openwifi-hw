@@ -366,6 +366,7 @@ side_ch_control # (
   .axi_awaddr_core(axi_awaddr_core),
   .iq_capture(slv_reg3[0]),
   .iq_capture_cfg(slv_reg3[5:4]),
+  .csi_iq_combined(slv_reg3[1]),
   .iq_trigger_select(slv_reg8[4:0]),
   .iq_trigger_free_run_flag(slv_reg5[0]),
   .iq_source_select(slv_reg5[2:1]),

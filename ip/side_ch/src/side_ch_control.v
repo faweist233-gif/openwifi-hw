@@ -92,6 +92,7 @@
 	 	input wire [4:0] axi_awaddr_core,
 		`DEBUG_PREFIX input wire iq_capture,
 		`DEBUG_PREFIX input wire [1:0] iq_capture_cfg,
+		`DEBUG_PREFIX input wire csi_iq_combined,
 		`DEBUG_PREFIX input wire [4:0] iq_trigger_select,
 		input wire iq_trigger_free_run_flag,
 		`DEBUG_PREFIX input wire [1:0] iq_source_select,
@@ -169,10 +170,11 @@
 					   OFDM_RX_COUNT        =      2'b01,
 					   OFDM_RX_END          =      2'b10;
 
-	localparam [1:0]   IQ_WAIT_FOR_CONDITION =      2'b00,
-					   IQ_PREPARE_TO_M_AXIS  =      2'b01,
-					   IQ_HEADER_TO_M_AXIS   =      2'b10,
-					   IQ_INFO_TO_M_AXIS     =      2'b11;
+	localparam [2:0]   IQ_WAIT_FOR_CONDITION =      3'b000,
+					   IQ_WINDOW_LOCKED      =      3'b001,
+					   IQ_PREPARE_TO_M_AXIS  =      3'b010,
+					   IQ_HEADER_TO_M_AXIS   =      3'b011,
+					   IQ_INFO_TO_M_AXIS     =      3'b100;
 
 	localparam [3:0]   WAIT_FOR_CONDITION   =      4'b0000,
 					   WAIT_FOR_CONDITION1  =      4'b0001,
@@ -202,6 +204,9 @@
 	`DEBUG_PREFIX reg [3:0] side_ch_state;
 	`DEBUG_PREFIX reg [3:0] side_ch_state_old;
 	`DEBUG_PREFIX wire [MAX_BIT_NUM_DMA_SYMBOL-1 : 0] num_dma_symbol_per_trans;
+	// +1 bit to avoid wrap-around when iq_len_target is at its max (1+len+58 must be exact)
+	`DEBUG_PREFIX wire [MAX_BIT_NUM_DMA_SYMBOL : 0] record_len;
+	`DEBUG_PREFIX wire csi_commit_pulse;
 
 	`DEBUG_PREFIX wire num_dma_symbol_reg_wr_is_onging;
 	reg num_dma_symbol_reg_wr_is_onging_reg;
@@ -266,7 +271,7 @@
 	reg iq_trigger;
 	reg [(TSF_TIMER_WIDTH-1):0] tsf_val_lock_by_iq_trigger;
 	`DEBUG_PREFIX reg [(bit_num-1):0] iq_count;
-	`DEBUG_PREFIX reg [1:0] iq_state;
+	`DEBUG_PREFIX reg [2:0] iq_state;
 	reg [(GPIO_STATUS_WIDTH-1):0] gpio_status_reg;
   reg signed [(RSSI_HALF_DB_WIDTH-1):0] rssi_half_db_reg;
 
@@ -288,6 +293,14 @@
 	assign MAX_NUM_DMA_SYMBOL_debug = MAX_NUM_DMA_SYMBOL;
 
 	assign num_dma_symbol_per_trans = HEADER_LEN + CSI_LEN + num_eq*EQUALIZER_LEN;
+	// combined (csi_iq_combined=1) record length in 64bit words: [IQ block: TSF + iq_len words]
+	// + [CSI block: TSF + phase_offset + CSI_LEN + num_eq*EQUALIZER_LEN words].
+	// MUST equal driver per_trans (side_ch.c RECORD_LEN) and host parser record_len.
+	assign record_len = (1+iq_len_target) + (HEADER_LEN + CSI_LEN + num_eq*EQUALIZER_LEN);
+	// CSI state machine commits capture when it ENTERS WAIT_FOR_CAPTURE_DONE (addr1/addr2 or
+	// short-frame path matched). IQ window is locked earlier by long_preamble_detected and only
+	// pushed to m_axis here -> every IQ block is guaranteed to be followed by its CSI block.
+	assign csi_commit_pulse = (side_ch_state_old != WAIT_FOR_CAPTURE_DONE) && (side_ch_state == WAIT_FOR_CAPTURE_DONE);
 	assign num_dma_symbol_reg_wr_is_onging = (slv_reg_wren_signal==1 && axi_awaddr_core==2);//slv_reg2 wr
 	assign m_axis_start_auto_trigger = (num_dma_symbol_reg_wr_is_onging_reg==1 && num_dma_symbol_reg_wr_is_onging_reg1==0);
 
@@ -310,8 +323,10 @@
 	assign side_info_fifo_wr_en = (capture_src_flag==0?csi_valid:(last_ofdm_symbol_flag?1:equalizer_valid));
 	assign side_info_fifo_din   = (capture_src_flag==0?csi:(last_ofdm_symbol_flag?0:equalizer));
 
-	assign side_info       = (iq_capture==0?side_info_csi:side_info_iq);
-	assign side_info_valid = (iq_capture==0?side_info_csi_valid:side_info_iq_valid);
+	assign side_info       = side_info_iq_valid ? side_info_iq : side_info_csi;
+	assign side_info_valid = side_info_iq_valid | side_info_csi_valid;
+	// combined mode: IQ and CSI blocks are serialized (see IQ_WINDOW_LOCKED and PREPARE_TO_M_AXIS),
+	// so side_info_iq_valid and side_info_csi_valid are never high at the same time.
 
 	assign m_axis_start_1trans = m_axis_start_1trans_reg;
 	assign pl_ask_data = pl_ask_data_reg;
@@ -433,7 +448,7 @@
 			ofdm_rx_state <= OFDM_RX_INIT;
 			last_ofdm_symbol_flag <= 0;
 		end else begin
-			if (iq_capture==0) begin
+			if ((iq_capture==0)|csi_iq_combined) begin
 				case (ofdm_rx_state)
 					OFDM_RX_INIT: begin
 						ht_rst <= 0;
@@ -476,7 +491,7 @@
 			capture_src_flag <= 0;
 			csi_valid_reg <= 0;
 		end else begin
-			if (iq_capture==0) begin
+			if ((iq_capture==0)|csi_iq_combined) begin
 				csi_valid_reg <= csi_valid;
 				if (csi_valid == 0 && csi_valid_reg==1)
 					capture_src_flag <= 1;
@@ -621,15 +636,43 @@
 						side_info_iq <= 0;
 						side_info_iq_valid <= 0;
 						iq_count <= 0;
-						if (iq_trigger) begin
+						if (csi_iq_combined) begin
+							// two-stage trigger stage 1: lock read window on LTF correlation peak.
+							// peak -> packet-start distance is the constant pre_trigger_len (C1),
+							// independent of rate/length. Only latch pointers, do not push yet.
+							if (long_preamble_detected) begin
+								iq_raddr <= iq_waddr - pre_trigger_len;
+								tsf_val_lock_by_iq_trigger <= tsf_runtime_val;
+								iq_state <= IQ_WINDOW_LOCKED;
+							end
+						end else if (iq_trigger) begin
 							iq_raddr <= iq_waddr - pre_trigger_len;
 							tsf_val_lock_by_iq_trigger <= tsf_runtime_val;
 							iq_state <= IQ_PREPARE_TO_M_AXIS;
 						end
 					end
 
+					IQ_WINDOW_LOCKED: begin
+						side_info_iq <= 0;
+						side_info_iq_valid <= 0;
+						iq_count <= 0;
+						if (long_preamble_detected) begin
+							// next packet's preamble: re-lock window, silently discard the still-open
+							// (uncommitted) window of a packet that did not pass FC/addr filtering
+							iq_raddr <= iq_waddr - pre_trigger_len;
+							tsf_val_lock_by_iq_trigger <= tsf_runtime_val;
+						end else if (csi_commit_pulse && ((MAX_NUM_DMA_SYMBOL_UDP-m_axis_data_count)>=record_len)) begin
+							// two-stage trigger stage 2: CSI FSM committed this capture ->
+							// now push the 1:1 paired IQ block (record_len space guaranteed)
+							iq_state <= IQ_PREPARE_TO_M_AXIS;
+						end
+					end
+
 					IQ_PREPARE_TO_M_AXIS: begin
-						iq_state <= ((MAX_NUM_DMA_SYMBOL_UDP-m_axis_data_count)>=(iq_len_target+1)?IQ_HEADER_TO_M_AXIS:IQ_WAIT_FOR_CONDITION);
+						if (csi_iq_combined)
+							iq_state <= ((MAX_NUM_DMA_SYMBOL_UDP-m_axis_data_count)>=record_len?IQ_HEADER_TO_M_AXIS:IQ_WAIT_FOR_CONDITION);
+						else
+							iq_state <= ((MAX_NUM_DMA_SYMBOL_UDP-m_axis_data_count)>=(iq_len_target+1)?IQ_HEADER_TO_M_AXIS:IQ_WAIT_FOR_CONDITION);
 					end
 
 					IQ_HEADER_TO_M_AXIS: begin
@@ -701,10 +744,10 @@
 		.injectdbiterr(),
 		.injectsbiterr(),
 		.rd_en(side_info_fifo_rd_en),
-		.rst(pkt_begin_rst|ht_rst|iq_capture),
+		.rst(pkt_begin_rst|ht_rst|(iq_capture&(~csi_iq_combined))),
 		.sleep(),
 		.wr_clk(clk),
-		.wr_en(side_info_fifo_wr_en&(iq_capture==0))
+		.wr_en(side_info_fifo_wr_en&((iq_capture==0)|csi_iq_combined))
 	);
 
 	// state machine to put captured side info (CSI) to the fifo of m_axis
@@ -727,7 +770,7 @@
     side_ch_state <= WAIT_FOR_CONDITION;
     side_ch_state_old <= WAIT_FOR_CONDITION;
   end else begin
-    if (iq_capture==0) begin
+    if ((iq_capture==0)|csi_iq_combined) begin
       if (pkt_header_valid_strobe)
         tsf_val_lock_by_sig<=tsf_runtime_val;
 
@@ -776,7 +819,22 @@
         end
 
         PREPARE_TO_M_AXIS: begin
-          side_ch_state <= ((MAX_NUM_DMA_SYMBOL_UDP-m_axis_data_count)>=num_dma_symbol_per_trans?HEADER_TO_M_AXIS:WAIT_FOR_CONDITION);
+          if (csi_iq_combined) begin
+            // must fit the WHOLE record and IQ block must have finished streaming.
+            // iq_state IQ_WAIT_FOR_CONDITION   -> IQ block already pushed, record committed
+            // iq_state IQ_WINDOW_LOCKED        -> IQ not yet committed (will not push)
+            // iq_state PREPARE/HEADER/INFO     -> IQ still streaming: hold (keep order [IQ][CSI])
+            if ((MAX_NUM_DMA_SYMBOL_UDP-m_axis_data_count)>=record_len) begin
+              if (iq_state==IQ_WAIT_FOR_CONDITION || iq_state==IQ_WINDOW_LOCKED)
+                side_ch_state <= HEADER_TO_M_AXIS;
+              else
+                side_ch_state <= PREPARE_TO_M_AXIS;
+            end else begin
+              side_ch_state <= WAIT_FOR_CONDITION;
+            end
+          end else begin
+            side_ch_state <= ((MAX_NUM_DMA_SYMBOL_UDP-m_axis_data_count)>=num_dma_symbol_per_trans?HEADER_TO_M_AXIS:WAIT_FOR_CONDITION);
+          end
         end
 
         HEADER_TO_M_AXIS: begin
