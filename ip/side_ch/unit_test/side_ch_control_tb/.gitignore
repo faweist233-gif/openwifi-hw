@@ -1,0 +1,4 @@
+*.vcd
+*.out
+*.wdb
+xsim.dir/
