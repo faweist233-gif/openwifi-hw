@@ -1,5 +1,13 @@
 // based on Xilinx module template
 // Xianjun jiao. putaoshu@msn.com; xianjun.jiao@imec.be;
+//
+// P2 (combined mode) note: no functional change here. side_ch_control emits a
+// fixed element count per WiFi frame in combined mode:
+//     record_len = (1 + iq_len) + (2 + 56 + num_eq*52)
+// and the driver truncates each DMA transfer to a whole multiple of per_trans
+// == record_len, so the existing read_pointer / tx_done logic already emits
+// whole records. FIFO depth = MAX_NUM_DMA_SYMBOL; on E316 (e310v2) the build
+// defines SIDE_CH_LESS_BRAM so it is 4096 (204.8us of history), not 8192.
 
 `timescale 1 ns / 1 ps
 
