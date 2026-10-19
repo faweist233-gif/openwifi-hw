@@ -1,8 +1,9 @@
 #!/bin/bash
 # Run the side_ch_control combined-mode behavioral testbenches with iverilog.
 #
-#   ./run.sh            # matched (addr2 path) + unmatched FC + short frame
+#   ./run.sh            # matched + unmatched + short + bypass equivalence
 #   ./run.sh matched    # only the matched happy path
+#   ./run.sh bypass     # reg3=0/1 outputs cycle-identical to fa6c896 RTL
 #
 # The DUT (side_ch_control) is the same Verilog used in synthesis; the only
 # sim-only pieces are xpm_fifo_sync.v (functional fwft model) and the empty
@@ -28,10 +29,12 @@ case "${1:-all}" in
   matched)  run_one side_ch_control_tb ;;
   unmatched) run_one side_ch_control_tb_unmatched ;;
   short)    run_one side_ch_control_tb_short ;;
+  bypass)   bash run_bypass.sh ;;
   all)
     run_one side_ch_control_tb
     run_one side_ch_control_tb_unmatched
     run_one side_ch_control_tb_short
+    bash run_bypass.sh
     ;;
-  *) echo "usage: $0 [matched|unmatched|short|all]" >&2; exit 2 ;;
+  *) echo "usage: $0 [matched|unmatched|short|bypass|all]" >&2; exit 2 ;;
 esac
