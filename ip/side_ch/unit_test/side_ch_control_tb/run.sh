@@ -3,6 +3,7 @@
 #
 #   ./run.sh            # matched + unmatched + short + bypass + payload
 #   ./run.sh matched    # only the matched happy path
+#   ./run.sh mac_semantics  # beacon/ACK/RTS addr2/addr3 source semantics
 #   ./run.sh bypass     # reg3=0/1 outputs cycle-identical to fa6c896 RTL
 #   ./run.sh payload    # combined CSI/IQ blocks == original pure CSI/IQ
 #
@@ -30,12 +31,14 @@ case "${1:-all}" in
   matched)  run_one side_ch_control_tb ;;
   unmatched) run_one side_ch_control_tb_unmatched ;;
   short)    run_one side_ch_control_tb_short ;;
+  mac_semantics) run_one side_ch_control_tb_mac_semantics ;;
   bypass)   bash run_bypass.sh ;;
   payload)  bash run_payload.sh ;;
   all)
     run_one side_ch_control_tb
     run_one side_ch_control_tb_unmatched
     run_one side_ch_control_tb_short
+    run_one side_ch_control_tb_mac_semantics
     bash run_bypass.sh
     bash run_payload.sh
     ;;

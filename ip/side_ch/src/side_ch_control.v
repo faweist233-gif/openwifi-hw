@@ -208,13 +208,25 @@
 	`DEBUG_PREFIX reg [3:0] side_ch_state;
 	`DEBUG_PREFIX reg [3:0] side_ch_state_old;
 
-	// P2.1: MAC header snapshot, latched when pkt_header_valid_strobe is high
-	// (header fully parsed), appended to the combined record
+	// P2.1: MAC header snapshot. Each field is latched on its own *_valid
+	// pulse (pkt_header_valid_strobe is the earlier PHY-header time); the
+	// 3-word block is appended to the combined record only.
 	`DEBUG_PREFIX reg [31:0] mac_hdr_fc_di;
 	`DEBUG_PREFIX reg [47:0] mac_hdr_addr1;
 	`DEBUG_PREFIX reg [47:0] mac_hdr_addr2;
 	`DEBUG_PREFIX reg [47:0] mac_hdr_addr3;
 	`DEBUG_PREFIX reg [15:0] mac_hdr_pkt_len;
+	// P2.1: source-side frame-type semantics. 802.11 control frames have no
+	// addr3, and only ACK(13)/CTS(12) lack addr2; all other control subtypes
+	// (2..11, 14, 15) carry addr2. Management/data frames always have both.
+	wire [1:0] mac_hdr_fc_type    = mac_hdr_fc_di[3:2];
+	wire [3:0] mac_hdr_fc_subtype = mac_hdr_fc_di[7:4];
+	wire mac_hdr_is_control = (mac_hdr_fc_type == 2'b01);
+	wire mac_hdr_has_addr2  = (!mac_hdr_is_control) ||
+	                          ((mac_hdr_fc_subtype >= 4'd2) && (mac_hdr_fc_subtype <= 4'd11)) ||
+	                          (mac_hdr_fc_subtype >= 4'd14);
+	wire mac_hdr_has_addr3  = (!mac_hdr_is_control);
+	reg  mac_hdr_addr2_seen;
 	`DEBUG_PREFIX wire [MAX_BIT_NUM_DMA_SYMBOL-1 : 0] num_dma_symbol_per_trans;
 
 	`DEBUG_PREFIX wire num_dma_symbol_reg_wr_is_onging;
@@ -773,6 +785,7 @@
     mac_hdr_addr2 <= 0;
     mac_hdr_addr3 <= 0;
     mac_hdr_pkt_len <= 0;
+    mac_hdr_addr2_seen <= 0;
 
     side_info_fifo_rd_en <= 0;
     side_info_csi <= 0;
@@ -796,20 +809,29 @@
       // FC_DI/addr1/addr2/addr3 (xpu decodes the MAC header later).
       // xpu outputs the 48-bit addresses in little-endian byte order; reverse
       // them so the 3-word block carries canonical 802.11 byte order.
+      // P2.1: clear the per-frame seen flag at frame start. The value itself
+      // is cleared at commit only if no valid addr2 arrived for this frame,
+      // so ACK/CTS (no addr2) can never leak the previous frame's address.
+      if (pkt_begin_rst) mac_hdr_addr2_seen <= 0;
       if (FC_DI_valid && !FC_DI_valid_reg) mac_hdr_fc_di <= FC_DI;
       if (addr1_valid && !addr1_valid_reg)
         mac_hdr_addr1 <= {addr1[7:0], addr1[15:8], addr1[23:16],
                           addr1[31:24], addr1[39:32], addr1[47:40]};
-      if (addr2_valid && !addr2_valid_reg)
+      if (csi_commit_pulse) begin
+        if (!mac_hdr_addr2_seen || !mac_hdr_has_addr2) mac_hdr_addr2 <= 0;
+        mac_hdr_addr3 <= 0;
+        mac_hdr_pkt_len <= pkt_len;
+      end
+      if (addr2_valid && !addr2_valid_reg && mac_hdr_has_addr2) begin
         mac_hdr_addr2 <= {addr2[7:0], addr2[15:8], addr2[23:16],
                           addr2[31:24], addr2[39:32], addr2[47:40]};
+        mac_hdr_addr2_seen <= 1;
+      end
       // Start this record's addr3 snapshot at commit (not at pkt_begin_rst:
       // the next frame's start may arrive while this record is still streaming).
-      if (csi_commit_pulse) mac_hdr_addr3 <= 0;
-      if (addr3_valid && !addr3_valid_reg)
+      if (addr3_valid && !addr3_valid_reg && mac_hdr_has_addr3)
         mac_hdr_addr3 <= {addr3[7:0], addr3[15:8], addr3[23:16],
                           addr3[31:24], addr3[39:32], addr3[47:40]};
-      if (csi_commit_pulse) mac_hdr_pkt_len <= pkt_len;
 
       side_ch_state_old <= side_ch_state;
       case (side_ch_state)
