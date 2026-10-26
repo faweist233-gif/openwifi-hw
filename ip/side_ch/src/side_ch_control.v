@@ -794,10 +794,18 @@
       // P2.1: latch each decoded MAC field at its own valid pulse.
       // pkt_header_valid_strobe is the PHY-header time and is too early for
       // FC_DI/addr1/addr2/addr3 (xpu decodes the MAC header later).
+      // xpu outputs the 48-bit addresses in little-endian byte order; reverse
+      // them so the 3-word block carries canonical 802.11 byte order.
       if (FC_DI_valid && !FC_DI_valid_reg) mac_hdr_fc_di <= FC_DI;
-      if (addr1_valid && !addr1_valid_reg) mac_hdr_addr1 <= addr1;
-      if (addr2_valid && !addr2_valid_reg) mac_hdr_addr2 <= addr2;
-      if (addr3_valid && !addr3_valid_reg) mac_hdr_addr3 <= addr3;
+      if (addr1_valid && !addr1_valid_reg)
+        mac_hdr_addr1 <= {addr1[7:0], addr1[15:8], addr1[23:16],
+                          addr1[31:24], addr1[39:32], addr1[47:40]};
+      if (addr2_valid && !addr2_valid_reg)
+        mac_hdr_addr2 <= {addr2[7:0], addr2[15:8], addr2[23:16],
+                          addr2[31:24], addr2[39:32], addr2[47:40]};
+      if (addr3_valid && !addr3_valid_reg)
+        mac_hdr_addr3 <= {addr3[7:0], addr3[15:8], addr3[23:16],
+                          addr3[31:24], addr3[39:32], addr3[47:40]};
       if (csi_commit_pulse) mac_hdr_pkt_len <= pkt_len;
       if (pkt_begin_rst) mac_hdr_addr3 <= 0; // no addr3 (ACK/control) -> don't keep stale
 

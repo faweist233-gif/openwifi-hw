@@ -264,13 +264,14 @@ module side_ch_control_tb;
     FC_DI = 32'h00A0_0801;
     @(negedge clk); FC_DI_valid = 1;
     @(negedge clk); FC_DI_valid = 0; FC_DI = 0;
-    addr1 = 48'h0011_2233_4455;
+    // xpu 48-bit addresses are byte-reversed on the wire
+    addr1 = 48'h55_4433_2211_00;
     @(negedge clk); addr1_valid = 1;
     @(negedge clk); addr1_valid = 0; addr1 = 0;
-    addr2 = 48'h6677_8899_AABB;
+    addr2 = 48'hBB_AA99_8877_66;
     @(negedge clk); addr2_valid = 1;   // -> WAIT_FOR_CAPTURE_DONE = csi_commit
     @(negedge clk); addr2_valid = 0; addr2 = 0;
-    addr3 = 48'hCCDD_EEFF_0011;
+    addr3 = 48'h11_00FF_EEDD_CC;
     @(negedge clk); addr3_valid = 1;
     @(negedge clk); addr3_valid = 0; addr3 = 0;
 

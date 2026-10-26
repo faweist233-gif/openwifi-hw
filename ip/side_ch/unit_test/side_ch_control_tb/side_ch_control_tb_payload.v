@@ -329,9 +329,9 @@ module side_ch_control_tb_payload;
     pre_trigger_len = PRE; iq_len_target = IQ_LEN; num_eq = 0;
     match_cfg = 0; pkt_len = 100; pkt_rate = 0;
     FC_DI = 32'h00A0_0801;
-    addr1 = 48'h0011_2233_4455;
-    addr2 = 48'h6677_8899_AABB;
-    addr3 = 48'hCCDD_EEFF_0011;
+    addr1 = 48'h55_4433_2211_00;
+    addr2 = 48'hBB_AA99_8877_66;
+    addr3 = 48'h11_00FF_EEDD_CC;
     m_axis_start_mode = 1; m_axis_data_count = 0; fulln_to_pl = 1;
     phase_offset_taken = 32'h1234;
 
