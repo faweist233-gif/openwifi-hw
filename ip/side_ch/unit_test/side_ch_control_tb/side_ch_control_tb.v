@@ -170,7 +170,7 @@ module side_ch_control_tb;
   // ---- monitor: capture m_axis write stream ----
   reg [63:0] cap [0:2047];
   integer wr_idx = 0;
-  integer expected_total = (1+IQ_LEN) + (2+56+0); // num_eq=0
+  integer expected_total = (1+IQ_LEN) + (2+56+0+3); // num_eq=0, P2.1 MAC block
   always @(posedge clk) begin
     if (data_to_ps_valid) begin
       cap[wr_idx] <= data_to_ps;
@@ -225,6 +225,10 @@ module side_ch_control_tb;
     iq_capture_cfg = 0; iq_trigger_select = 0; iq_source_select = 0;
     pre_trigger_len = PRE; iq_len_target = IQ_LEN; num_eq = 0;
     match_cfg = 0; pkt_len = 100; pkt_rate = 0; // non-HT
+    FC_DI = 32'h00A0_0801;                      // duration=0x00A0, FC=0x0801
+    addr1 = 48'h0011_2233_4455;
+    addr2 = 48'h6677_8899_AABB;
+    addr3 = 48'hCCDD_EEFF_0011;
     m_axis_start_mode = 1; m_axis_data_count = 0; fulln_to_pl = 1;
     phase_offset_taken = 32'h1234;
 
@@ -311,6 +315,9 @@ module side_ch_control_tb;
           end
         end
       end
+      check_word(1 + IQ_LEN + 58, 64'h22334455_00A00801, "mac_w0");
+      check_word(1 + IQ_LEN + 59, 64'h66778899AABB_0011, "mac_w1");
+      check_word(1 + IQ_LEN + 60, 64'h0064_CCDDEEFF0011, "mac_w2");
     end
 
     if (failures == 0)

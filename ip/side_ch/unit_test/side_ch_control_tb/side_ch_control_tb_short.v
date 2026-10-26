@@ -170,7 +170,7 @@ module side_ch_control_tb_short;
   // ---- monitor: capture m_axis write stream ----
   reg [63:0] cap [0:2047];
   integer wr_idx = 0;
-  integer expected_total = (1+IQ_LEN) + (2+56+0); // num_eq=0
+  integer expected_total = (1+IQ_LEN) + (2+56+0+3); // num_eq=0, P2.1 MAC block
   always @(posedge clk) begin
     if (data_to_ps_valid) begin
       cap[wr_idx] <= data_to_ps;

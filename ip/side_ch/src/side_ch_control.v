@@ -165,6 +165,9 @@
 	localparam integer CSI_LEN = 56; // length of single CSI
 	localparam integer EQUALIZER_LEN = (56-4); // for non HT, four {32767,32767} will be padded to achieve 52 (non HT should have 48)
 	localparam integer HEADER_LEN = 2; //timestamp and freq offset
+	// P2.1: MAC header block appended to the CSI record in combined mode only.
+	// 3 words = FC/DI(32) + addr1(48) + addr2(48) + addr3(48) + pkt_len(16)
+	localparam integer MAC_HDR_LEN = 3;
 
 	localparam [1:0]   OFDM_RX_INIT         =      2'b00,
 					   OFDM_RX_COUNT        =      2'b01,
@@ -184,7 +187,8 @@
 					   HEADER_TO_M_AXIS     =      4'b0101,
 					   HEADER1_TO_M_AXIS    =      4'b0110,
                        CSI_INFO_TO_M_AXIS   =      4'b0111,
-					   EQ_INFO_TO_M_AXIS    =      4'b1000;
+					   EQ_INFO_TO_M_AXIS    =      4'b1000,
+					   MAC_INFO_TO_M_AXIS   =      4'b1001;
 
 	wire ht_flag;
 	`DEBUG_PREFIX reg  ht_flag_capture;
@@ -203,6 +207,14 @@
 	`DEBUG_PREFIX reg [3:0] num_eq_count;
 	`DEBUG_PREFIX reg [3:0] side_ch_state;
 	`DEBUG_PREFIX reg [3:0] side_ch_state_old;
+
+	// P2.1: MAC header snapshot, latched when pkt_header_valid_strobe is high
+	// (header fully parsed), appended to the combined record
+	`DEBUG_PREFIX reg [31:0] mac_hdr_fc_di;
+	`DEBUG_PREFIX reg [47:0] mac_hdr_addr1;
+	`DEBUG_PREFIX reg [47:0] mac_hdr_addr2;
+	`DEBUG_PREFIX reg [47:0] mac_hdr_addr3;
+	`DEBUG_PREFIX reg [15:0] mac_hdr_pkt_len;
 	`DEBUG_PREFIX wire [MAX_BIT_NUM_DMA_SYMBOL-1 : 0] num_dma_symbol_per_trans;
 
 	`DEBUG_PREFIX wire num_dma_symbol_reg_wr_is_onging;
@@ -289,7 +301,8 @@
 	assign MAX_NUM_DMA_SYMBOL_UDP_debug = MAX_NUM_DMA_SYMBOL_UDP;
 	assign MAX_NUM_DMA_SYMBOL_debug = MAX_NUM_DMA_SYMBOL;
 
-	assign num_dma_symbol_per_trans = HEADER_LEN + CSI_LEN + num_eq*EQUALIZER_LEN;
+	assign num_dma_symbol_per_trans = HEADER_LEN + CSI_LEN + num_eq*EQUALIZER_LEN
+	                                + (csi_iq_combined ? MAC_HDR_LEN : 0);
 	assign num_dma_symbol_reg_wr_is_onging = (slv_reg_wren_signal==1 && axi_awaddr_core==2);//slv_reg2 wr
 
 	// ------------------------------------------------------------------
@@ -304,7 +317,7 @@
 	                        (side_ch_state == WAIT_FOR_CAPTURE_DONE);
 	// fixed element count per frame in combined mode
 	wire [MAX_BIT_NUM_DMA_SYMBOL-1:0] combined_record_len =
-		(1 + iq_len_target) + (HEADER_LEN + CSI_LEN + num_eq*EQUALIZER_LEN);
+		(1 + iq_len_target) + (HEADER_LEN + CSI_LEN + num_eq*EQUALIZER_LEN + MAC_HDR_LEN);
 	assign m_axis_start_auto_trigger = (num_dma_symbol_reg_wr_is_onging_reg==1 && num_dma_symbol_reg_wr_is_onging_reg1==0);
 
 	assign ht_flag = pkt_rate[7];
@@ -753,6 +766,12 @@
     side_info_count <= 0;
     num_eq_count <= 0;
 
+    mac_hdr_fc_di <= 0;
+    mac_hdr_addr1 <= 0;
+    mac_hdr_addr2 <= 0;
+    mac_hdr_addr3 <= 0;
+    mac_hdr_pkt_len <= 0;
+
     side_info_fifo_rd_en <= 0;
     side_info_csi <= 0;
     side_info_csi_valid <= 0;
@@ -768,6 +787,17 @@
       FC_DI_valid_reg <= FC_DI_valid;
       addr1_valid_reg <= addr1_valid;
       addr2_valid_reg <= addr2_valid;
+
+      // P2.1: snapshot the full MAC header when the header is complete
+      // (pkt_header_valid_strobe is after FC/addr1/addr2/addr3/pkt_len).
+      // Held until the 3-word block is emitted.
+      if (pkt_header_valid_strobe) begin
+        mac_hdr_fc_di  <= FC_DI;
+        mac_hdr_addr1  <= addr1;
+        mac_hdr_addr2  <= addr2;
+        mac_hdr_addr3  <= addr3;
+        mac_hdr_pkt_len<= pkt_len;
+      end
 
       side_ch_state_old <= side_ch_state;
       case (side_ch_state)
@@ -854,7 +884,10 @@
           else
             side_info_csi_valid <= 0;
 
-          side_ch_state <= (side_info_count==64?(num_eq==0?WAIT_FOR_CONDITION:EQ_INFO_TO_M_AXIS):side_ch_state);
+          side_ch_state <= (side_info_count==64
+              ? (csi_iq_combined ? MAC_INFO_TO_M_AXIS
+                                 : (num_eq==0?WAIT_FOR_CONDITION:EQ_INFO_TO_M_AXIS))
+              : side_ch_state);
           side_info_fifo_rd_en <= (side_info_count==63?0:1);
         end
 
@@ -880,7 +913,20 @@
             side_info_fifo_rd_en <= 1;
           end
 
-          side_ch_state <= ((num_eq_count==(num_eq-1) && side_info_count==(EQUALIZER_LEN-1))?WAIT_FOR_CONDITION:side_ch_state);
+          side_ch_state <= ((num_eq_count==(num_eq-1) && side_info_count==(EQUALIZER_LEN-1))
+              ? (csi_iq_combined ? MAC_INFO_TO_M_AXIS : WAIT_FOR_CONDITION)
+              : side_ch_state);
+        end
+
+        MAC_INFO_TO_M_AXIS: begin // P2.1: 3-word MAC header block (combined only)
+          side_info_csi_valid <= 1;
+          side_info_count <= side_info_count + 1;
+          case (side_info_count)
+            9'd0: side_info_csi <= {mac_hdr_addr1[31:0], mac_hdr_fc_di};
+            9'd1: side_info_csi <= {mac_hdr_addr2, mac_hdr_addr1[47:32]};
+            default: side_info_csi <= {mac_hdr_pkt_len, mac_hdr_addr3};
+          endcase
+          side_ch_state <= (side_info_count==2 ? WAIT_FOR_CONDITION : MAC_INFO_TO_M_AXIS);
         end
       endcase
     end
