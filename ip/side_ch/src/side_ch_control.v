@@ -803,11 +803,13 @@
       if (addr2_valid && !addr2_valid_reg)
         mac_hdr_addr2 <= {addr2[7:0], addr2[15:8], addr2[23:16],
                           addr2[31:24], addr2[39:32], addr2[47:40]};
+      // Start this record's addr3 snapshot at commit (not at pkt_begin_rst:
+      // the next frame's start may arrive while this record is still streaming).
+      if (csi_commit_pulse) mac_hdr_addr3 <= 0;
       if (addr3_valid && !addr3_valid_reg)
         mac_hdr_addr3 <= {addr3[7:0], addr3[15:8], addr3[23:16],
                           addr3[31:24], addr3[39:32], addr3[47:40]};
       if (csi_commit_pulse) mac_hdr_pkt_len <= pkt_len;
-      if (pkt_begin_rst) mac_hdr_addr3 <= 0; // no addr3 (ACK/control) -> don't keep stale
 
       side_ch_state_old <= side_ch_state;
       case (side_ch_state)
