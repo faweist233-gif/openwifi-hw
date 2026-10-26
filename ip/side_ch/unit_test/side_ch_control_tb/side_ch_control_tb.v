@@ -258,13 +258,21 @@ module side_ch_control_tb;
     @(negedge clk); ofdm_symbol_eq_out_pulse = 1;
     @(negedge clk); ofdm_symbol_eq_out_pulse = 0;
 
-    // FC / addr1 / addr2 filter (match_cfg=0 -> always pass)
+    // MAC header decode: each field is valid only on its own valid pulse,
+    // and the bus changes afterwards. This reproduces the real xpu timing
+    // (pkt_header_valid_strobe is the earlier PHY-header time).
+    FC_DI = 32'h00A0_0801;
     @(negedge clk); FC_DI_valid = 1;
-    @(negedge clk); FC_DI_valid = 0;
+    @(negedge clk); FC_DI_valid = 0; FC_DI = 0;
+    addr1 = 48'h0011_2233_4455;
     @(negedge clk); addr1_valid = 1;
-    @(negedge clk); addr1_valid = 0;
+    @(negedge clk); addr1_valid = 0; addr1 = 0;
+    addr2 = 48'h6677_8899_AABB;
     @(negedge clk); addr2_valid = 1;   // -> WAIT_FOR_CAPTURE_DONE = csi_commit
-    @(negedge clk); addr2_valid = 0;
+    @(negedge clk); addr2_valid = 0; addr2 = 0;
+    addr3 = 48'hCCDD_EEFF_0011;
+    @(negedge clk); addr3_valid = 1;
+    @(negedge clk); addr3_valid = 0; addr3 = 0;
 
     // header parse -> OFDM_RX_END (last_ofdm_symbol_flag) + CSI TSF lock
     @(negedge clk);

@@ -237,6 +237,7 @@
 	reg FC_DI_valid_reg;
 	reg addr1_valid_reg;
 	reg addr2_valid_reg;
+	reg addr3_valid_reg;
 	`DEBUG_PREFIX reg m_axis_start_1trans_reg;
 	`DEBUG_PREFIX reg pl_ask_data_reg;
 	`DEBUG_PREFIX reg [C_S_AXIS_TDATA_WIDTH-1 : 0] data_to_ps_reg;
@@ -761,6 +762,7 @@
     FC_DI_valid_reg <= 0;
     addr1_valid_reg <= 0;
     addr2_valid_reg <= 0;
+    addr3_valid_reg <= 0;
 
     ht_flag_capture <= 0;
     side_info_count <= 0;
@@ -787,17 +789,17 @@
       FC_DI_valid_reg <= FC_DI_valid;
       addr1_valid_reg <= addr1_valid;
       addr2_valid_reg <= addr2_valid;
+      addr3_valid_reg <= addr3_valid;
 
-      // P2.1: snapshot the full MAC header when the header is complete
-      // (pkt_header_valid_strobe is after FC/addr1/addr2/addr3/pkt_len).
-      // Held until the 3-word block is emitted.
-      if (pkt_header_valid_strobe) begin
-        mac_hdr_fc_di  <= FC_DI;
-        mac_hdr_addr1  <= addr1;
-        mac_hdr_addr2  <= addr2;
-        mac_hdr_addr3  <= addr3;
-        mac_hdr_pkt_len<= pkt_len;
-      end
+      // P2.1: latch each decoded MAC field at its own valid pulse.
+      // pkt_header_valid_strobe is the PHY-header time and is too early for
+      // FC_DI/addr1/addr2/addr3 (xpu decodes the MAC header later).
+      if (FC_DI_valid && !FC_DI_valid_reg) mac_hdr_fc_di <= FC_DI;
+      if (addr1_valid && !addr1_valid_reg) mac_hdr_addr1 <= addr1;
+      if (addr2_valid && !addr2_valid_reg) mac_hdr_addr2 <= addr2;
+      if (addr3_valid && !addr3_valid_reg) mac_hdr_addr3 <= addr3;
+      if (csi_commit_pulse) mac_hdr_pkt_len <= pkt_len;
+      if (pkt_begin_rst) mac_hdr_addr3 <= 0; // no addr3 (ACK/control) -> don't keep stale
 
       side_ch_state_old <= side_ch_state;
       case (side_ch_state)

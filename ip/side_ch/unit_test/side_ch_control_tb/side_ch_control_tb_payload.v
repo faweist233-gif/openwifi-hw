@@ -361,6 +361,8 @@ module side_ch_control_tb_payload;
     @(negedge clk); addr1_valid = 0;
     @(negedge clk); addr2_valid = 1;
     @(negedge clk); addr2_valid = 0;
+    @(negedge clk); addr3_valid = 1;
+    @(negedge clk); addr3_valid = 0;
 
     @(negedge clk);
     tsf_runtime_val = 64'd2000;
